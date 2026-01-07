@@ -1,0 +1,99 @@
+---
+title: "EP09-respuesta-equipo-9"
+date: "2026-01-07"
+output: html_document
+---
+
+
+# EP 9
+
+Un estudio recolectó medidas anatómicas de 247 hombres y 260 mujeres (Heinz et al., 2003). El estudio incluyó nueve mediciones del esqueleto (ocho diámetros y una profundidad de hueso a hueso) y doce mediciones de grosor (circunferencias) que incluyen el tejido. La siguiente tabla detalla las variables registradas en este estudio:
+
+Biacromial.diameter	Diámetro biacromial (a la altura de los hombros)	cm
+Biiliac.diameter	Diámetro biiliaco (a la altura de la pelvis)	cm
+Bitrochanteric.diameter	Diámetro bitrocantéreo (a la altura de las caderas)	cm
+Chest.depth	Profundidad del pecho (entre la espina y el esternón a la altura de los pezones)	cm
+Chest.diameter	Diámetro del pecho (a la altura de los pezones)	cm
+Elbows.diameter	Suma de los diámetros de los codos	cm
+Wrists.diameter	Suma de los diámetros de las muñecas	cm
+Knees.diameter	Suma de los diámetros de las rodillas	cm
+Ankles.diameter	Suma de los diámetros de los tobillos	cm
+Shoulder.Girth	Grosor de los hombros sobre los músculos deltoides	cm
+Chest.Girth	Grosor del pecho, sobre tejido mamario en mujeres y a la altura de los pezones en varones	cm
+Waist.Girth	Grosor a la altura de la cintura	cm
+Navel.Girth	Grosor a la altura del ombligo	cm
+Hip.Girth	Grosor a la altura de las caderas	cm
+Thigh.Girth	Grosor promedio de ambos muslos bajo el pliegue del glúteo	cm
+Bicep.Girth	Grosor promedio de ambos bíceps, brazos flectados	cm
+Forearm.Girth	Grosor promedio de ambos antebrazos, brazos extendidos palmas hacia arriba	cm
+Knee.Girth	Grosor promedio de ambas rodillas, posición levemente flectada, medición arriba de la rótula	cm
+Calf.Maximum.Girth	Grosor promedio de la parte más ancha de ambas pantorrillas	cm
+Ankle.Minimum.Girth	Grosor promedio de la parte más delgada de ambos tobillos	cm
+Wrist.Minimum.Girth	Grosor promedio de la parte más delgada de ambas muñecas	cm
+Age	Edad	Años
+Weight	Peso	Kg
+Height	Estatura	cm
+Gender	Género	1: hombre
+0: mujer
+
+
+Pasos:
+Definir la semilla a utilizar, que corresponde a los últimos cuatro dígitos del RUN (sin considerar el dígito verificador) del integrante de menor edad del equipo.
+Seleccionar una muestra aleatoria de 100 mujeres (si la semilla es un número par) o 100 hombres (si la semilla es impar), y separar 70 casos para trabajar en la construcción de modelos y 30 para su evaluación en datos no vistos.
+Seleccionar de forma aleatoria ocho posibles variables predictoras.
+Seleccionar, de las otras variables, una que el equipo considere que podría ser útil para predecir la variable Peso (sin considerar la estatura), justificando bien esta selección.
+Usando el entorno R y paquetes estándares1, construir un modelo de regresión lineal simple con el predictor seleccionado en el paso anterior.
+Usando herramientas estándares1 para la exploración de modelos del entorno R, buscar entre dos y cinco predictores de entre las variables seleccionadas al azar en el punto 3, para agregar al modelo de regresión lineal simple obtenido en el paso 5.
+Evaluar la bondad de ajuste (incluyendo el análisis de casos atípicos y casos influyentes) y la generalidad (condiciones para RLM) de los modelos y “arreglarlos” en caso de que presenten algún problema.
+Evaluar el poder predictivo del modelo con los datos no utilizados para construirlo.
+
+```{r}
+
+library
+set.seed(413)
+
+datos <- read.csv2("EP09 Datos.csv")
+muestra <- datos[datos$Gender == 1, ][sample(sum(datos$Gender == 1), 100), ]
+
+indices_train <- sample(100, size = 0.7 * 100)
+
+train <- muestra[indices_train, ]
+test  <- muestra[-indices_train, ]
+
+respuesta <- "Weight"
+candidatas <- setdiff(colnames(train), c(respuesta, "Gender", "ID"))
+predictoras <- sample(candidatas, 8, replace = FALSE)
+predictoras
+
+```
+De las otras variables, elegimos "Chest.diameter", que describe el diámetro del pecho (a la altura de los pezones). Elegimos esta variable por que...
+
+```{r}
+
+library(stats)
+library(broom)
+library(dplyr)
+
+# crear model de regresion lineal simple
+# Predictor: Diametro del pecho
+# Respuesta: Peso
+
+modelo1 <- lm(Weight ~ Chest.diameter, train)
+
+nulo <- lm(Weight ~ 1, train)
+peso <- add1(nulo, scope = modelo1, test = "F") |> 
+  tidy() |> 
+  mutate(
+    p.value = format.pval(p.value, justify = "right"),
+    AIC = arrange(AIC)
+  )
+
+cat(
+  "",
+  paste("Modelo:", format(formula(nulo))),
+  format(peso),
+  sep = "\n"
+)
+
+```
+
