@@ -1,0 +1,132 @@
+---
+title: "EP10-respuesta-equipo-1"
+author: "Equipo 1"
+date: "2026-01-16"
+output: html_document
+---
+
+# EP 10
+
+
+
+```{r}
+library(car)
+library(dplyr)
+
+set.seed(3413)
+
+datos <- read.csv2("EP09 Datos.csv")
+
+
+# Creamos variable IMC
+datos$IMC <- datos$Weight / ((datos$Height/100)**2)
+
+# Creamos variable EN (estado nutricional): sobrepeso (IMC ≥ 23,2) y no sobrepeso (IMC < 23,2)
+datos$EN <- ifelse(datos$IMC >= 23.2, "Sobrepeso", "No sobrepeso")
+
+datos$EN <- factor(datos$EN, levels = c("No sobrepeso", "Sobrepeso"))
+
+datos_hombres <- datos %>% 
+  filter(Gender == 1)
+
+hombres_sobrepeso <- datos_hombres %>% 
+  filter(EN == "Sobrepeso")
+
+hombres_no_sobrepeso <- datos_hombres %>% 
+  filter(EN == "No sobrepeso")
+
+muestra_sobrepeso <- hombres_sobrepeso %>% 
+  sample_n(75)
+
+muestra_no_sobrepeso <- hombres_no_sobrepeso %>% 
+  sample_n(75)
+
+muestra <- bind_rows(muestra_sobrepeso, muestra_no_sobrepeso)
+
+train_sobrepeso <- muestra_sobrepeso %>% 
+  sample_n(50)
+
+train_no_sobrepeso <- muestra_no_sobrepeso %>% 
+  sample_n(50)
+
+train <- bind_rows(train_sobrepeso, train_no_sobrepeso)
+
+test_sobrepeso <- muestra_sobrepeso %>% 
+  anti_join(train_sobrepeso)
+
+test_no_sobrepeso <- muestra_no_sobrepeso %>% 
+  anti_join(train_no_sobrepeso)
+
+test <- bind_rows(test_sobrepeso, test_no_sobrepeso)
+
+
+respuesta <- "EN"
+# Predictores seleccionado al azar del ejercicio anterior
+predictores <- c("Wrist.Minimum.Girth", "Elbows.diameter", "Ankles.diameter", "Forearm.Girth", "Navel.Girth", "Calf.Maximum.Girth", "Biacromial.diameter", "Knee.Girth")
+```
+
+Un buen predictor para el estado nutricional es la circunferencia de la cintura debido a que en esa zona se acomula la mayor cantidad de grasa en el cuerpo en los hombres. Preocupante cuando superan los 90 cm de circunferencia.
+Fuente: https://www.gob.mx/salud/articulos/indicadores-de-sobrepeso-y-obesidad?idiom=es#:~:text=%E2%80%8B%E2%80%8B%E2%80%8B%E2%80%8B%E2%80%8B%E2%80%8B%E2%80%8BIndicadores%20de%20sobrepeso%20y%20obesidad,-El%20sobrepeso%20y&text=El%20%C3%ADndice%20de%20masa%20corporal%20es%20la%20relaci%C3%B3n%20entre%20el,metros%20(kg/m2).
+
+La variable mas parecida a esta es "Waist.Girth", la cual representa el grosor al nivel de la cintura, por lo que usaremos esta variable como primer predictor al modelo.
+
+```{r}
+modelo_simple <- glm(EN ~ Waist.Girth, data = train, family = binomial(link="logit"))
+summary(modelo_simple)
+```
+
+Vemos que esta variable por si sola aporta bastante al modelo (Pr(>|t|) mucho menor a nivel de significancia de 0.05 y que se redujo la desviación de 138.628 del modelo nulo a 91.732.
+
+
+Para elegir las variables a agregar al modelo se usará regresión paso a paso, en específico la selección hacia adelante porque no queremos probar una teoria, solo estamos explorando los datos. En vez de empezar por un modelo nulo, se empieza con la RLS hecha anteriormente. Haremos 5 pasos para agregar las 5 mejores variables que aporten mayor información al modelo que se va construyendo. Se escoje la variable con menor AIC para guiar la busqueda, ya que éste refleja la complejidad del modelo y queremos seguir el principio de parsimonia.
+
+```{r}
+formula_scope <- as.formula(paste("EN ~ Waist.Girth +", 
+                                  paste(predictores, collapse = " + ")))
+
+modelo <- step(modelo_simple, 
+                   scope = list(lower = modelo_simple, upper = formula_scope), 
+                   direction = "both", 
+                   trace = 1
+                   )
+
+summary(modelo)
+```
+
+Se obtuvo un modelo con 5 variables predictoras usando regresión escalonada, que busca golosamente el mejor modelo entre uno con "Waist.Girth", hasta uno que considera todos los posibles predictores. Se logró disminuír la desviación mas de la mitad respecto al modelo nulo.
+
+
+Ahora verificamos la confiabilidad del modelo:
+
+1. Debe existir una relación lineal entre los predictores y la respuesta tranformada:
+```{r}
+residualPlots(modelo, fitted = FALSE)
+crPlots(modelo)
+```
+
+De los gráficos y de los resultados de las pruebas de curvatura, podemos decir que todos los predictores están relacionados linealmente con la respuesta transformada.
+
+
+
+2. Los residuos deben ser independientes entre sí: 
+```{r}
+durbinWatsonTest(modelo)
+```
+
+
+3. Revisar que no exista multicolinealidad fuerte:
+```{r}
+vif(modelo)
+```
+
+Vemos que ningún predictor consigue un vif mayor a 2, por lo que podemos decir que no hay multicolinealidad fuerte en los predictores.
+
+4. Vemos que no hay informacion incompleta, ya que tenemos más de 15 observaciones para cada predictor.
+
+5. Verificar que no hay separación perfecta:
+```{r}
+influencePlot(modelo)
+```
+
+
+
