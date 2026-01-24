@@ -1,5 +1,5 @@
 ---
-title: "EP10-respuesta-equipo-1"
+title: "EP11-respuesta-equipo-1"
 author: "Equipo 1"
 date: "2026-01-21"
 output: html_document
@@ -8,7 +8,7 @@ output: html_document
 # EP10
 A partir de los datos del EP09, realizar un modelo de regresión logistica simple, eligiendo un predictor basandose en literatura, luego en base a los predictores elegidos aleatoriamente en el EP09, construir un modelo de regresión logística múltiple.
 
-```{r, message=FALSE}
+```{r message=FALSE}
 library(car)
 library(dplyr)
 library(pROC)
@@ -359,7 +359,7 @@ El modelo fue entrenado utilizando cinco repeticiones de validación cruzada de 
 
 #### Usando RFE, construir un modelo de regresión logística múltiple para la variable EN que incluya el conjunto de predictores, entre dos y seis, que entregue la mejor curva ROC y que utilice validación cruzada dejando uno fuera para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura –Weight y Height respectivamente– ni IMC).
 El objetivo es construir un modelo para predecir si una persona tiene sobrepeso o no (`EN`). Se debe usar RFE para seleccionar entre 2 y 6 predictores, maximizando la métrica ROC y utilizando validación cruzada *Leave-One-Out* (LOOCV).
-```{r}
+```{r, message=FALSE, warning=FALSE}
 ### 5. Regresión Logística con RFE (Variable EN)
 
 # Preparación de los datos para regresión logística
@@ -437,7 +437,7 @@ Se detectó multicolinealidad severa (VIF > 10) en las variables de contorno de 
 Con 100 datos esta condición se cumple ya que tenemos 5 predictores. 5x15 = 75 y 5x20 = 100.
 
 5. Ausencia de separación perfecta
-Esta condicion tampoco se cumple, ya que se detectó separación perfecta en varias iteraciones de la validación cruzada (LOOCV), evidenciada por las advertencias de convergencia del algoritmo. 
+Esta condicion tampoco se cumple, ya que se detectó separación perfecta en varias iteraciones de la validación cruzada (LOOCV), evidenciada por las advertencias de convergencia del algoritmo. Estas son del tipo: "Warning: glm.fit: fitted probabilities numerically 0 or 1 occurred"
 
 6. Casos Influyentes
 ```{r}
@@ -511,9 +511,10 @@ ggroc(roc_pru, color = "steelblue") +
   ggtitle(paste0("Curva ROC (Test) - AUC: ", round(roc_pru$auc, 3))) +
   xlab("Especificidad") + ylab("Sensibilidad")
 ```
+
 De esta comparación podemos decir que el modelo no sufre de sobreajuste (overfitting). Ha aprendido patrones reales de la anatomía corporal en lugar de memorizar los datos de entrenamiento. A simple vista, tiene buenos indices de exactitud, sensibilidad y especificidad comparado con el de prueba. Sin embargo, ei bien el modelo demuestra un alto poder predictivo, no se considera estadísticamente confiable para fines inferenciales. El incumplimiento de los supuestos de no-multicolinealidad y la presencia de separación perfecta comprometen la interpretación de los coeficientes y la credibilidad del modelo.
 
-###6. Pronunciarse sobre la confiabilidad y capacidad predictiva de los modelos
+### 6. Pronunciarse sobre la confiabilidad y capacidad predictiva de los modelos
 
 A. Modelo RLM para Peso
 Confiabilidad: Baja. No cumple el supuesto de linealidad (curvatura en residuos) ni el de no-multicolinealidad (VIF críticos en Chest.Girth), lo que hace inestables sus coeficientes.
