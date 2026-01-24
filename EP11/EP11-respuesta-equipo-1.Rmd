@@ -16,7 +16,7 @@ library(ggpubr)
 library(leaps)
 library(caret)
 
-set.seed(33413)
+set.seed(86949)
 
 datos <- read.csv2("EP09 Datos.csv")
 
@@ -25,25 +25,31 @@ datos$IMC <- datos$Weight / ((datos$Height/100)**2)
 datos$EN <- ifelse(datos$IMC >= 23.2, "Sobrepeso", "No sobrepeso")
 datos$EN <- factor(datos$EN, levels = c("No sobrepeso", "Sobrepeso"))
 
-# Filtrar hombres
-datos_hombres <- datos %>% filter(Gender == 1)
-
 # Separar por clase
-hombres_sobrepeso <- datos_hombres %>% filter(EN == "Sobrepeso")
-hombres_no_sobrepeso <- datos_hombres %>% filter(EN == "No sobrepeso")
+personas_sobrepeso <- datos %>% filter(EN == "Sobrepeso")
+personas_no_sobrepeso <- datos %>% filter(EN == "No sobrepeso")
 
 # Seleccionar muestras de sobrepeso de 75 de cada uno
-muestra_sobrepeso <- hombres_sobrepeso %>% sample_n(50)
-muestra_no_sobrepeso <- hombres_no_sobrepeso %>% sample_n(50)
+muestra_sobrepeso <- personas_sobrepeso %>% sample_n(75)
+muestra_no_sobrepeso <- personas_no_sobrepeso %>% sample_n(75)
 
 # Crear conjunto de entrenamiento (100 datos: 50 SP + 50 NoSP)
 train_sobrepeso <- muestra_sobrepeso %>% sample_n(50)
 train_no_sobrepeso <- muestra_no_sobrepeso %>% sample_n(50)
 
-muestra <- bind_rows(muestra_sobrepeso, muestra_no_sobrepeso)
-muestra <- muestra[sample(nrow(muestra)), ]
+train <- bind_rows(train_sobrepeso, train_no_sobrepeso)
+train <- train[sample(nrow(train)), ]
 
-cat("Dimensiones muestra:", nrow(muestra), "- Distribución:", table(muestra$EN), "\n")
+# Crear conjunto de prueba (50 datos: 25 SP + 25 NoSP)
+# Usamos anti_join para tomar los que NO se usaron en train
+test_sobrepeso <- muestra_sobrepeso %>% anti_join(train_sobrepeso)
+test_no_sobrepeso <- muestra_no_sobrepeso %>% anti_join(train_no_sobrepeso)
+
+test <- bind_rows(test_sobrepeso, test_no_sobrepeso)
+test <- test[sample(nrow(test)), ]
+
+cat("Dimensiones train:", nrow(train), "- Distribución:", table(train$EN), "\n")
+cat("Dimensiones test:", nrow(test), "- Distribución:", table(test$EN), "\n")
 
 ```
 
@@ -53,12 +59,12 @@ Usando el paquete leaps, se realiza una busqueda exhaustiva para seleccionar de 
 
 ```{r}
 # Eliminar IMC y EN
-muestra_no_imc_en <- muestra[, !(names(muestra) %in% c("IMC", "EN"))]
+train_no_imc_en <- train[, !(names(train) %in% c("IMC", "EN"))]
 
 # Ajuste exhaustivo entre 2 y 8 predictores
 exhaustivo <- regsubsets(
   Weight ~ .,
-  data = muestra_no_imc_en,
+  data = train_no_imc_en,
   nvmax = 8,
   method = "exhaustive"
 )
@@ -81,31 +87,26 @@ best_predictors
 Usando el paquete caret, se construye un modelo de regresión lineal múltiple con los predictores elegidos anteriormente y evaluarlo usando 1000 muestras para bootstraping, 10 veces la muestra original.
 
 ```{r}
-formula_final <- as.formula(
+formula_best <- as.formula(
   paste("Weight ~", paste(best_predictors, collapse = " + "))
 )
 
-formula_final
-
 ctrl <- trainControl(
-  method = "boot",        # bootstrap
-  number = 1000           # número de muestras bootstrap
+  method = "boot",
+  number = 1000
 )
 
 modelo_lm <- train(
-  formula_final,
-  data = muestra_no_imc_en,
+  formula_best,
+  data = train_no_imc_en,
   method = "lm",
   trControl = ctrl
 )
 
-print(modelo_lm)
+modelo_lm
+summary(modelo_lm$finalModel)
 ```
 
-```{r}
-# Métricas bootstrap promedio
-modelo_lm$results
-```
 
 ### Confiabilidad del modelo
 
@@ -119,31 +120,42 @@ Ahora verificamos la confiabilidad del modelo:
 
 4. Cada predictor debe estar relacionado linealmente con la respuesta.
 ```{r}
-residualPlots(modelo_rlm)
+modelo_lm_base <- lm(
+  formula_best,
+  data = train_no_imc_en
+)
+residualPlots(modelo_lm_base)
 ```
-Identifcamos que la variable "Calf.Maximum.Girth" presenta una curvatura más prominente que las demás, y esto tambien se puede observar al ver que en la prueba individual Pr(>|Test stat|) obtuvo un valor bastante cercano al nivel de significancia 0.05. Procedemos a obtener una representación gráfica de posibles valores atípicos, el apalancamiento y la distancia de Cook.
+Identificamos que la mayoria de los predictores presentan curvatura, por lo que se puede decir que no existe una relacion completamente lineal de los predictores con la respuesta, esto significa que el peso no depende linealmente de los predictores y esto es esperable en variables antropométricas.
+
+Procedemos a obtener una representación gráfica de posibles valores atípicos, el apalancamiento y la distancia de Cook.
 
 ```{r}
-influencePlot(modelo_rlm, id = list(cex = 0.7))
+influencePlot(modelo_lm_base, id = list(cex = 0.7))
 ```
 
-Se presentan 4 valores atipicos, con apalancamientos cercanos entre 0.11 y 0.24, tambien todos poseen una distancia de Cook menor al umbral (menos exigente) 1.
+Se presentan 5 valores atipicos, el dato 97 posee una nivel de apalancamiento 3 veces el umbral de 0,75 aprox, tambien todos poseen una distancia de Cook menor al umbral de 0,163 a excepcón del dato 31.
 
-La curvatura que vimos en el gráfico de ResidualPlots puede no ser real, sino una consecuencia de estos casos atípicos. Procedemos a eliminar los datos con mayor apalancamiento.
+La curvatura que vimos en el gráfico de ResidualPlots puede no ser real, sino una consecuencia de este caso atípico. Procedemos a eliminar el dato con mayor apalancamiento.
 
 ```{r}
-nombres_outliers <- c("103", "222")
+# Eliminar observaciones influyentes
+outliers <- c(97, 31)
+train_limpio <- train_no_imc_en[-outliers, ]
 
-train_limpio <- train[ !rownames(train) %in% nombres_outliers, ]
+# Reajustar modelo
+modelo_arreglado <- lm(
+  formula(modelo_lm_base),
+  data = train_limpio
+)
 
-modelo_arreglado <- update(modelo_rlm, data = train_limpio)
-
+# Diagnóstico
 residualPlots(modelo_arreglado)
+influencePlot(modelo_arreglado)
+
 ```
-Podemos apreciar que la eliminación de los casos de mayor apalancamiento ("103", "222") corrigió exitosamente el problema de linealidad detectado previamente en la variable "Calf.Maximum.Girth".
 
-La prueba de curvatura para esta variable arrojaba un valor 0.07, cercano al nivel de significancia. Tras la rectificación, el nuevo valor es 0.305.
-
+Podemos apreciar que la eliminación de este caso corrigió un poco el problema de linealidad detectado previamente, pero no logra satisfacer completamente la condicion, por lo que no consideramos la eliminacion de los datos.
 
 5. La distibución de los residuos debe ser cercana a la normal centrada en cero.
 
@@ -152,7 +164,7 @@ La prueba de curvatura para esta variable arrojaba un valor 0.07, cercano al niv
 ```{r}
 ncvTest(modelo_arreglado)
 ```
-El p-value es 0.764, lo que es mayor que el nivel de significancia (0.05), por lo que no existe evidencia suficiente para rechazar la hipótesis de homocedasticidad. Por lo tanto, se asume que la variabilidad de los residuos es aproximadamente constante.
+El p-value es 0.389, lo que es mayor que el nivel de significancia (0.05), por lo que no existe evidencia suficiente para rechazar la hipótesis de homocedasticidad. Por lo tanto, se asume que la variabilidad de los residuos es aproximadamente constante.
 
 
 7. Los residuos deben ser independientes entre sí.
@@ -160,7 +172,7 @@ El p-value es 0.764, lo que es mayor que el nivel de significancia (0.05), por l
 ```{r}
 durbinWatsonTest(modelo_arreglado)
 ```
-Como el p-value es 0.798, mayor al nivel de significancia (0.05), no existe evidencia suficiente para rechazar la independencia entre los residuos. Además el estadístico D-W tiene un valor de 1.970302 y un valor cercano a 2 indica ausencia total de autocorrelación.
+Como el p-value es 0.174, mayor al nivel de significancia (0.05), no existe evidencia suficiente para rechazar la independencia entre los residuos. Además el estadístico D-W tiene un valor de 1.735 y un valor cercano a 2 indica ausencia total de autocorrelación.
 
 
 8. No debe existir multicolinealidad.
@@ -168,38 +180,184 @@ Como el p-value es 0.798, mayor al nivel de significancia (0.05), no existe evid
 ```{r}
 vif(modelo_arreglado)
 ```
-Como los valores rondan entre 1.1 y 2.1, los predictores son lo suficientemente independientes entre sí para que el modelo sea estable.
 
+Se presentan valores que representan una multicolinealidad crítica, para ser específicos Chest.Girth. Se tiene tambien predicotres con multicolinealidad moderada como Hip.Girth, Waist.Girth y Bicep.Girth. Los demás predictores tienen una multicolinealidad aceptable. Se puede decir que Chest.Girth no presenta información significativa al modelo.
 
-A continuación, se pondrá a prueba el modelo con los datos no utilizados para construirlo para evaluar su poder predictivo usando validacion cruzada dejando uno afuera.
+A continuación, se pondrá a prueba el modelo con los datos no utilizados para construirlo para evaluar su poder predictivo.
 
 ```{r}
-predicciones_test <- predict(modelo_arreglado, newdata = test)
+test_no_imc_en <- test[, !(names(test) %in% c("IMC", "EN"))]
+pred_test <- predict(modelo_lm, newdata = test_no_imc_en)
 
-error_test <- test$Weight - predicciones_test
+res_test <- postResample(
+  pred = pred_test,
+  obs  = test_no_imc_en$Weight
+)
 
-rmse_test <- sqrt(mean(error_test^2))
+modelo_lm_base$results
+res_test
 
-mae_test <- mean(abs(error_test))
-
-error_entrenamiento <- summary(modelo_arreglado)$sigma
-
-cat("=== RESULTADOS DE LA EVALUACIÓN FINAL ===\n")
-cat("RMSE en Test (Datos nuevos):      ", round(rmse_test, 3), "kg\n")
-cat("MAE en Test (Error promedio):     ", round(mae_test, 3), "kg\n")
-cat("-----------------------------------------\n")
-cat("Error en Entrenamiento (Sigma):   ", round(error_entrenamiento, 3), "kg\n")
-cat("Diferencia (Test - Entrenamiento):", round(rmse_test - error_entrenamiento, 3), "kg\n")
 ```
 
-Precisión en el "Mundo Real": error absoluto medio (MAE) es de 3.51 kg. Esto indica que, en promedio, el modelo construido se equivoca por unos 3.5 kilos aprox al estimar el peso de una persona desconocida. Sin embargo, considerando que el peso corporal de un adulto varía comúnmente entre 50 y 90 kg, un error promedio de 3.5 kg es bastante aceptable para un modelo lineal.
+Precisión en el "Mundo Real": error absoluto medio (MAE) es de 1.71 kg. Esto indica que, en promedio, el modelo construido se equivoca por unos 1.7 kilos aprox al estimar el peso de una persona desconocida. Sin embargo, considerando que el peso corporal de un adulto varía comúnmente entre 50 y 90 kg, este error promedio es bastante aceptable.
 
-Evaluación de la generalización (RMSE vs. Sigma):
-
-Error en Entrenamiento (Optimista): 3.902 kg.
-Error en Test (Realista): 4.823 kg.
-
-La Brecha: Existe una diferencia de 0.92 kg. El error aumentó al pasar a datos nuevos.
+El modelo fue entrenado utilizando validación por bootstrapping (1000 remuestreos) sobre el conjunto de entrenamiento mediante el paquete caret. Posteriormente, se evaluó su desempeño predictivo en un conjunto de prueba independiente. La similitud entre las métricas obtenidas en el bootstrap y en el conjunto de prueba indica una adecuada capacidad de generalización del modelo.
 
 
-Por otra parte, el incremento en el error no indica necesariamente un fallo del modelo, sino que puede ser influenciado por el efecto de la depuración de valores atípicos realizada en la fase de entrenamiento. Mientras que el entrenamiento se realizó construyendo un modelo que cumpliera todas las condiciones, y fue rectificado con la eliminación de algunos datos, la evaluación final se hizo sobre datos reales no filtrados, y solo 30 de ellos. A pesar de esto, el modelo evita errores severos, lo cual demuestra una capacidad predictiva válida para observaciones nuevas.
+
+
+#### Haciendo un poco de investigación sobre el paquete caret, en particular cómo hacer Recursive Feature Elimination (RFE), construir un modelo de regresión lineal múltiple para predecir la variable IMC que incluya entre 10 y 20 predictores, seleccionando el conjunto de variables que maximice R2 y que use cinco repeticiones de validación cruzada de cinco pliegues para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura ni estado nutricional –Weight, Height, EN respectivamente).
+
+```{r}
+train_rfe <- train %>%
+  select(-Weight, -Height, -EN)
+
+x <- train_rfe %>% select(-IMC)
+y <- train_rfe$IMC
+
+ctrl_rfe <- rfeControl(
+  functions = lmFuncs,        # regresión lineal
+  method = "repeatedcv",
+  number = 5,                 # 5 folds
+  repeats = 5,                # 5 repeticiones
+  verbose = FALSE
+)
+
+rfe_model <- rfe(
+  x = x,
+  y = y,
+  sizes = 10:20,              # ENTRE 10 Y 20
+  rfeControl = ctrl_rfe,
+  metric = "Rsquared"
+)
+
+formula_rfe <- as.formula(
+  paste("IMC ~", paste(predictors(rfe_model), collapse = " + "))
+)
+
+modelo_final_rfe <- train(
+  formula_rfe,
+  data = train_rfe,
+  method = "lm",
+  trControl = trainControl(
+    method = "repeatedcv",
+    number = 5,
+    repeats = 5
+  )
+)
+
+summary(modelo_final_rfe$finalModel)
+
+```
+
+### Confiabilidad del modelo
+
+Ahora verificamos la confiabilidad del modelo:
+
+1. La variable de salida (IMC) es una variable cuantitativa y continua, ya que es una relación entre magnitudes físicas.
+
+2. Los predictores son cuantitativos, ya que son mediciones fisicas de un objeto real, a excepción de Gender el cual es dicotómico.
+
+3. Los predictores no son constantes.
+
+4. Cada predictor debe estar relacionado linealmente con la respuesta.
+```{r}
+modelo_lm_base_rfe <- lm(
+  formula_rfe,
+  data = train_rfe
+)
+residualPlots(modelo_lm_base_rfe)
+```
+Se puede ver que los predictores seleccionados no presentan curvatura, a excepción de Ankles.diameter, el cual presenta una leve curvatura significativa. Este predictor podría no estra relacionado linealmente con el IMC.
+
+Procedemos a obtener una representación gráfica de posibles valores atípicos, el apalancamiento y la distancia de Cook.
+
+```{r}
+influencePlot(modelo_lm_base_rfe, id = list(cex = 0.7))
+```
+
+Se presentan 5 valores atipicos, el dato 97 posee una nivel de apalancamiento superior al umbral de 0,3 aprox, tambien todos poseen una distancia de Cook menor al umbral de 0,122.
+La curvatura que vimos en el gráfico de ResidualPlots puede no ser real, sino una consecuencia de este caso atípico. Procedemos a eliminar el dato con mayor apalancamiento.
+
+```{r}
+# Eliminar observaciones influyentes
+outliers_rfe <- c(97, 20)
+train_limpio_rfe <- train_rfe[-outliers, ]
+
+# Reajustar modelo
+modelo_arreglado_rfe <- lm(
+  formula(modelo_lm_base_rfe),
+  data = train_limpio_rfe
+)
+
+# Diagnóstico
+residualPlots(modelo_arreglado_rfe)
+influencePlot(modelo_arreglado_rfe)
+
+```
+
+Podemos ver que no mejoró la curvatura para Ankles.diameter, entonces no consideramos la eliminación.
+
+5. La distibución de los residuos debe ser cercana a la normal centrada en cero.
+
+6. La variabilidad de los residuos debe ser aproximadamente constante (homocedasticidad)
+
+```{r}
+ncvTest(modelo_lm_base_rfe)
+```
+El p-value es 0.122, lo que es mayor que el nivel de significancia (0.05), por lo que no existe evidencia suficiente para rechazar la hipótesis de homocedasticidad. Por lo tanto, se asume que la variabilidad de los residuos es aproximadamente constante.
+
+
+7. Los residuos deben ser independientes entre sí.
+
+```{r}
+durbinWatsonTest(modelo_lm_base_rfe)
+```
+Como el p-value es 0.146, mayor al nivel de significancia (0.05), no existe evidencia suficiente para rechazar la independencia entre los residuos. Además el estadístico D-W tiene un valor de 2.284 y un valor cercano a 2 indica ausencia total de autocorrelación.
+
+
+8. No debe existir multicolinealidad.
+
+```{r}
+vif(modelo_lm_base_rfe)
+```
+
+Se presentan valores que representan una multicolinealidad crítica, para ser específicos Bicep.Girth y Forearm.Girth. Se tiene tambien predicotres con multicolinealidad moderada como Wrists.diameter, Ankles.diameter, Elbows.diameter, Gender, Wrist.Minimum.Girth. Los demás predictores tienen una multicolinealidad aceptable. Se puede decir que Bicep.Girth, Forearm.Girth no presenta información significativa al modelo.
+
+A continuación, se pondrá a prueba el modelo con los datos no utilizados para construirlo para evaluar su poder predictivo.
+
+```{r}
+test_rfe <- test %>%
+  select(-Weight, -Height, -EN)
+
+pred_test <- predict(modelo_lm_base_rfe, newdata = test_rfe)
+
+res_test <- postResample(
+  pred = pred_test,
+  obs  = test_rfe$IMC
+)
+
+modelo_final_rfe_arreglado <- train(
+  formula_rfe,
+  data = train_limpio_rfe,
+  method = "lm",
+  trControl = trainControl(
+    method = "repeatedcv",
+    number = 5,
+    repeats = 5
+  )
+)
+
+modelo_final_rfe_arreglado$results
+res_test
+```
+
+Precisión en el "Mundo Real": error absoluto medio (MAE) es de 1.06 kg. Esto indica que, en promedio, el modelo construido se equivoca por un 1 kilo aprox al estimar el peso de una persona desconocida. Sin embargo, considerando que el peso corporal de un adulto varía comúnmente entre 50 y 90 kg, este error promedio es bastante aceptable.
+
+El modelo fue entrenado utilizando cinco repeticiones de validación cruzada de cinco pliegues sobre el conjunto de entrenamiento mediante el paquete caret. Posteriormente, se evaluó su desempeño predictivo en un conjunto de prueba independiente. La similitud entre las métricas obtenidas en la validación cruzada y en el conjunto de prueba indica una adecuada capacidad de generalización del modelo.
+
+
+#### Usando RFE, construir un modelo de regresión logística múltiple para la variable EN que incluya el conjunto de predictores, entre dos y seis, que entregue la mejor curva ROC y que utilice validación cruzada dejando uno fuera para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura –Weight y Height respectivamente– ni IMC).
+
+
+
