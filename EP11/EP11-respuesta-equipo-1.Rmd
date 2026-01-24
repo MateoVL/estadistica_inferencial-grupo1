@@ -6,7 +6,7 @@ output: html_document
 ---
 
 # EP10
-A partir de los datos del EP09, realizar un modelo de regresión logistica simple, eligiendo un predictor en basandose en literatura, luego en base a los predictores elegidos aleatoriamente en el EP09, construir un modelo de regresión logística múltiple.
+A partir de los datos del EP09, realizar un modelo de regresión logistica simple, eligiendo un predictor basandose en literatura, luego en base a los predictores elegidos aleatoriamente en el EP09, construir un modelo de regresión logística múltiple.
 
 ```{r, message=FALSE}
 library(car)
@@ -358,6 +358,173 @@ El modelo fue entrenado utilizando cinco repeticiones de validación cruzada de 
 
 
 #### Usando RFE, construir un modelo de regresión logística múltiple para la variable EN que incluya el conjunto de predictores, entre dos y seis, que entregue la mejor curva ROC y que utilice validación cruzada dejando uno fuera para evitar el sobreajuste (obviamente no se debe considerar las variables Peso, Estatura –Weight y Height respectivamente– ni IMC).
+El objetivo es construir un modelo para predecir si una persona tiene sobrepeso o no (`EN`). Se debe usar RFE para seleccionar entre 2 y 6 predictores, maximizando la métrica ROC y utilizando validación cruzada *Leave-One-Out* (LOOCV).
+```{r}
+### 5. Regresión Logística con RFE (Variable EN)
+
+# Preparación de los datos para regresión logística
+# Quitamos Weight, Height e IMC como pide el enunciado
+train_log <- train %>% select(-Weight, -Height, -IMC)
+test_log  <- test  %>% select(-Weight, -Height, -IMC)
+
+# Ajustar nombres de niveles para evitar errores
+levels(train_log$EN) <- make.names(levels(train_log$EN))
+levels(test_log$EN)  <- make.names(levels(test_log$EN))
+
+# Definir control para RFE
+# Usamos lrFuncs (funciones para regresión logística) pero modificadas 
+# para usar ROC como métrica de selección
+funcs_log <- lrFuncs
+funcs_log$summary <- twoClassSummary # Necesario para calcular ROC
+
+ctrl_rfe_log <- rfeControl(
+  functions = funcs_log,
+  method = "LOOCV",         # Validación Leave-One-Out
+  saveDetails = TRUE,
+  returnResamp = "all",
+  verbose = FALSE
+)
+
+# Ejecutar RFE
+set.seed(86949) # Mantener la misma semilla del equipo
+
+rfe_log <- rfe(
+  x = train_log %>% select(-EN),
+  y = train_log$EN,
+  sizes = 2:6,              # Entre 2 y 6 predictores
+  rfeControl = ctrl_rfe_log,
+  metric = "ROC"            # Maximizar área bajo la curva
+)
+
+# Ver resultados del RFE
+print(rfe_log)
+predictors(rfe_log)
+
+# Gráfico del rendimiento según número de variables
+ggplot(rfe_log) + theme_bw()
+```
+
+```{r}
+# Ajustar el modelo final con los predictores ganadores ---
+vars_elegidas <- predictors(rfe_log)
+f_final <- as.formula(paste("EN ~", paste(vars_elegidas, collapse = " + ")))
+modelo_final_glm <- glm(f_final, data = train_log, family = "binomial")
+```
+
+Ahora verificaremos las condiciones para este tipo de modelo:
+1.Linealidad
+```{r}
+# Generamos los gráficos de residuos, desactivando el gráfico de ajustados (fitted=FALSE)
+residualPlots(modelo_final_glm, fitted = FALSE)
+```
+Pr(>|Test stat|) muestra el p-value de la prueba de curvatura, todos los valores son mayores a 0.05, por lo que no existe evidencia suficiente para rechazar linealidad.
+
+2. Independencia de los Residuos
+```{r}
+# 2. Verificación de Independencia (Durbin-Watson)
+durbinWatsonTest(modelo_final_glm)
+```
+El p-value obtenido es 0.396 > 0.05, por lo tanto, no existe evidencia para rechazar la independencia de los residuos. Además, el estadístico D-W es 2.16, muy cercano al valor ideal de 2 que nos indica autocorrelación cero.
+
+3. Multicolinealidad
+```{r}
+# 3. Verificación de Multicolinealidad
+vif(modelo_final_glm)
+```
+Se detectó multicolinealidad severa (VIF > 10) en las variables de contorno de pecho y hombros. Esto es esperable dado que son medidas que anátomicamente ya se encuentran correlacionadas. Esta condición no se cumple, puede deberse principalmente a que el modelo se consturyó utilizando las variables que maximizan el ROC y esto puede llevar a elegir variables que entreguen la misma información, haciendolo eficiente pero redundante.
+
+4. Información Incompleta
+Con 100 datos esta condición se cumple ya que tenemos 5 predictores. 5x15 = 75 y 5x20 = 100.
+
+5. Ausencia de separación perfecta
+Esta condicion tampoco se cumple, ya que se detectó separación perfecta en varias iteraciones de la validación cruzada (LOOCV), evidenciada por las advertencias de convergencia del algoritmo. 
+
+6. Casos Influyentes
+```{r}
+# 6. Verificación de Casos Influyentes
+influencePlot(modelo_final_glm)
+```
+El análisis de influencia detectó observaciones críticas, específicamente el caso 16, el cual presenta una distancia de Cook elevada (0.501) y un alto apalancamiento (Hat > 0.5). El modelo es sensible a observaciones individuales.
+
+Como conclusión de todas las verificaciones anteriores, se puede decir que el modelo no es confiable. Sin embargo, se pondrá a prueba en el conjunto de datos no vistos, para ver los resultados y su capacidad predictiva en comparación con los datos de entrenamiento.
+
+```{r}
+#5. Evaluación en conjunto de prueba)
+
+# 1. Realizar predicciones de probabilidad y clase
+probs_pru <- predict(modelo_final_glm, newdata = test_log, type = "response")
+umbral <- 0.5
+preds_pru <- ifelse(probs_pru > umbral, "Sobrepeso", "No.sobrepeso")
+preds_pru <- factor(preds_pru, levels = c("No.sobrepeso", "Sobrepeso"))
+
+# 2. Matriz de Confusión
+# 'positive' debe ser la clase de interés (Sobrepeso)
+mat_conf_pru <- confusionMatrix(preds_pru, test_log$EN, positive = "Sobrepeso")
+
+# 3. Curva ROC y AUC
+roc_pru <- roc(test_log$EN, probs_pru, levels = c("No.sobrepeso", "Sobrepeso"), direction = "<")
+
+# 4. Impresión de resultados 
+cat("\n\nEvaluación del modelo (cjto. de prueba):\n")
+cat("----------------------------------------\n")
+print(mat_conf_pru[["table"]]) # Tabla cruzada
+cat("\n")
+
+cat(sprintf(" Exactitud:     %.3f\n", mat_conf_pru[["overall"]]["Accuracy"]))
+cat(sprintf(" Sensibilidad:  %.3f\n", mat_conf_pru[["byClass"]]["Sensitivity"]))
+cat(sprintf(" Especificidad: %.3f\n", mat_conf_pru[["byClass"]]["Specificity"]))
+cat(sprintf(" AUC:           %.3f\n", roc_pru$auc))
 
 
 
+# Recuperamos métricas de entrenamiento (Promedios de la validación cruzada RFE)
+best_size <- rfe_log$optsize
+train_metrics <- rfe_log$results[rfe_log$results$Variables == best_size, ]
+
+cat("\n\n--- Análisis de Sobreajuste (Entrenamiento vs Prueba) ---\n")
+cat("Comparación de métricas clave:\n\n")
+
+# 1. AUC
+cat(sprintf("AUC Entrenam.:  %.3f  vs  Prueba: %.3f  | Dif: %.3f\n", 
+            train_metrics$ROC, roc_pru$auc, train_metrics$ROC - roc_pru$auc))
+
+# 2. Sensibilidad
+cat(sprintf("Sens. Entrenam.: %.3f  vs  Prueba: %.3f  | Dif: %.3f\n", 
+            train_metrics$Sens, mat_conf_pru[["byClass"]]["Sensitivity"], train_metrics$Sens - mat_conf_pru[["byClass"]]["Sensitivity"]))
+
+# 3. Especificidad
+cat(sprintf("Spec. Entrenam.: %.3f  vs  Prueba: %.3f  | Dif: %.3f\n", 
+            train_metrics$Spec, mat_conf_pru[["byClass"]]["Specificity"], train_metrics$Spec - mat_conf_pru[["byClass"]]["Specificity"]))
+
+cat("\nConclusión del análisis:\n")
+diff_auc <- train_metrics$ROC - roc_pru$auc
+if(diff_auc > 0.1) {
+  cat("Existe una caída NOTABLE (>0.1) en el desempeño. Posible sobreajuste (Overfitting).\n")
+} else {
+  cat("Las métricas son similares. El modelo generaliza correctamente.\n")
+}
+
+# 5. Gráfico ROC Final
+ggroc(roc_pru, color = "steelblue") +
+  geom_segment(aes(x = 1, xend = 0, y = 0, yend = 1), color="grey", linetype="dashed") +
+  theme_bw() +
+  ggtitle(paste0("Curva ROC (Test) - AUC: ", round(roc_pru$auc, 3))) +
+  xlab("Especificidad") + ylab("Sensibilidad")
+```
+De esta comparación podemos decir que el modelo no sufre de sobreajuste (overfitting). Ha aprendido patrones reales de la anatomía corporal en lugar de memorizar los datos de entrenamiento. A simple vista, tiene buenos indices de exactitud, sensibilidad y especificidad comparado con el de prueba. Sin embargo, ei bien el modelo demuestra un alto poder predictivo, no se considera estadísticamente confiable para fines inferenciales. El incumplimiento de los supuestos de no-multicolinealidad y la presencia de separación perfecta comprometen la interpretación de los coeficientes y la credibilidad del modelo.
+
+###6. Pronunciarse sobre la confiabilidad y capacidad predictiva de los modelos
+
+A. Modelo RLM para Peso
+Confiabilidad: Baja. No cumple el supuesto de linealidad (curvatura en residuos) ni el de no-multicolinealidad (VIF críticos en Chest.Girth), lo que hace inestables sus coeficientes.
+Poder Predictivo: Bueno a pesar de las fallas teóricas, el error promedio (MAE) de 1.71 kg es bajo para el rango de peso adulto, indicando utilidad en la práctica.
+
+B. Modelo RLM para IMC
+Confiabilidad: Moderada/Baja. Cumple homoscedasticidad e independencia, pero falla gravemente en multicolinealidad debido a la alta cantidad de predictores (VIF altos en Bicep.Girth y Forearm.Girth).
+Poder Predictivo: Alto. El MAE de 1.06 es excelente y la similitud entre métricas de entrenamiento y prueba confirma que generaliza correctamente.
+
+C. Modelo Logístico para EN
+Confiabilidad: Baja. Presenta "separación perfecta" y multicolinealidad severa, lo que invalida la interpretación estadística de los coeficientes.
+Poder Predictivo: Alto. Con un AUC de 0.936 y Exactitud del 84% en el conjunto de prueba (sin sobreajuste respecto al entrenamiento), es altamente eficaz para clasificar el estado nutricional.
+
+Los tres modelos comparten el mismo diagnóstico: la naturaleza correlacionada de las medidas usadas genera multicolinealidad, impidiendo que sean confiables para explicar relaciones causales (inferencia). Sin embargo, esta misma correlación permite que tengan un alto poder predictivo, validándolos como herramientas eficaces para estimación y clasificación en nuevos pacientes.
