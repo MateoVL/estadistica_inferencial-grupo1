@@ -5,8 +5,9 @@ date: "2026-01-21"
 output: html_document
 ---
 
-# EP10
-A partir de los datos del EP09, realizar un modelo de regresión logistica simple, eligiendo un predictor basandose en literatura, luego en base a los predictores elegidos aleatoriamente en el EP09, construir un modelo de regresión logística múltiple.
+# EP11
+
+Tomar muestra de 100 personas, y crear 3 modelos, dos de regresión lineal múltiple y uno d regresión logística. Evaluarlos con diferentes métodos.
 
 ```{r message=FALSE}
 library(car)
@@ -107,6 +108,8 @@ modelo_lm
 summary(modelo_lm$finalModel)
 ```
 
+Se obtuvo un modelo con un R cuadrado de 0,97, lo que sugiere que tiene un buen ajuste de datos y pareciera representar bien la variable de respuesta.
+
 
 ### Confiabilidad del modelo
 
@@ -194,7 +197,7 @@ res_test <- postResample(
   obs  = test_no_imc_en$Weight
 )
 
-modelo_lm_base$results
+modelo_lm$results
 res_test
 
 ```
@@ -249,6 +252,9 @@ modelo_final_rfe <- train(
 summary(modelo_final_rfe$finalModel)
 
 ```
+
+Se ubtuvo un R cuadrado de 0,86 sugiriendo que el modelo puede explicar el 86% de la variabilidad, es un valor cercano a 1 pero menor al modelo pasado, lo que sugiere una peor capacidad predictiva.
+
 
 ### Confiabilidad del modelo
 
@@ -465,10 +471,8 @@ mat_conf_pru <- confusionMatrix(preds_pru, test_log$EN, positive = "Sobrepeso")
 roc_pru <- roc(test_log$EN, probs_pru, levels = c("No.sobrepeso", "Sobrepeso"), direction = "<")
 
 # 4. Impresión de resultados 
-cat("\n\nEvaluación del modelo (cjto. de prueba):\n")
-cat("----------------------------------------\n")
+cat("Evaluación del modelo (cjto. de prueba):\n")
 print(mat_conf_pru[["table"]]) # Tabla cruzada
-cat("\n")
 
 cat(sprintf(" Exactitud:     %.3f\n", mat_conf_pru[["overall"]]["Accuracy"]))
 cat(sprintf(" Sensibilidad:  %.3f\n", mat_conf_pru[["byClass"]]["Sensitivity"]))
@@ -481,7 +485,7 @@ cat(sprintf(" AUC:           %.3f\n", roc_pru$auc))
 best_size <- rfe_log$optsize
 train_metrics <- rfe_log$results[rfe_log$results$Variables == best_size, ]
 
-cat("\n\n--- Análisis de Sobreajuste (Entrenamiento vs Prueba) ---\n")
+cat("Análisis de Sobreajuste (Entrenamiento vs Prueba)")
 cat("Comparación de métricas clave:\n\n")
 
 # 1. AUC
@@ -514,7 +518,7 @@ ggroc(roc_pru, color = "steelblue") +
 
 De esta comparación podemos decir que el modelo no sufre de sobreajuste (overfitting). Ha aprendido patrones reales de la anatomía corporal en lugar de memorizar los datos de entrenamiento. A simple vista, tiene buenos indices de exactitud, sensibilidad y especificidad comparado con el de prueba. Sin embargo, ei bien el modelo demuestra un alto poder predictivo, no se considera estadísticamente confiable para fines inferenciales. El incumplimiento de los supuestos de no-multicolinealidad y la presencia de separación perfecta comprometen la interpretación de los coeficientes y la credibilidad del modelo.
 
-### 6. Pronunciarse sobre la confiabilidad y capacidad predictiva de los modelos
+### Pronunciarse sobre la confiabilidad y capacidad predictiva de los modelos
 
 A. Modelo RLM para Peso
 Confiabilidad: Baja. No cumple el supuesto de linealidad (curvatura en residuos) ni el de no-multicolinealidad (VIF críticos en Chest.Girth), lo que hace inestables sus coeficientes.
